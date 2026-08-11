@@ -127,7 +127,7 @@ For a complete list of supported languages, see [Google Translate language codes
 Copyright (C) 2026 Kristijan Antovski
 
 This project is licensed under the GNU General Public License v3.0 or
-(at your option) any later version. See the [LICENSE.md](LICENSE.md) file
+(at your option) any later version. See the [COPYING.md](COPYING.md) file
 for the full license text.
 
 ## Contributing
