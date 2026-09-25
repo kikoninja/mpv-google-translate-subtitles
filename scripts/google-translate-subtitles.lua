@@ -24,6 +24,9 @@ local o = {
     prefetch_seconds = 3,
     toggle_key = 'Ctrl+t',
     curl_command = '/usr/bin/curl',
+    translation_backend = 'libretranslate',
+    libretranslate_url = 'https://libretranslate.com/translate',
+    libretranslate_api_key = 'replace-with-your-api-key',
 }
 options.read_options(o, 'google-translate-subtitles')
 
@@ -111,7 +114,20 @@ end
 
 local utils = require 'mp.utils'
 
-local function parse_translate_response(body)
+local function json_escape(value)
+    if not value then
+        return ''
+    end
+
+    return value
+        :gsub('\\', '\\\\')
+        :gsub('"', '\\"')
+        :gsub('\n', '\\n')
+        :gsub('\r', '\\r')
+        :gsub('\t', '\\t')
+end
+
+local function parse_google_response(body)
     local parsed = utils.parse_json(body)
     if type(parsed) ~= 'table' or type(parsed[1]) ~= 'table' then
         return nil, 'unexpected response format'
@@ -127,23 +143,60 @@ local function parse_translate_response(body)
     return table.concat(parts, '')
 end
 
+local function parse_libretranslate_response(body)
+    local parsed = utils.parse_json(body)
+    if type(parsed) ~= 'table' then
+        return nil, 'unexpected response format'
+    end
+
+    if type(parsed.translatedText) == 'string' then
+        return parsed.translatedText
+    end
+
+    if type(parsed.translations) == 'table' and type(parsed.translations[1]) == 'table' and type(parsed.translations[1].translatedText) == 'string' then
+        return parsed.translations[1].translatedText
+    end
+
+    return nil, 'missing translatedText in response'
+end
+
 local function request_translation(line, callback)
     if state.cache[line.cache_key] then
         callback(state.cache[line.cache_key].translation)
         return
     end
 
-    local args = {
-        o.curl_command,
-        '-sS',
-        '--get',
-        '--data-urlencode', 'q=' .. line.text,
-        '--data', 'client=gtx',
-        '--data', 'sl=' .. o.input_lang,
-        '--data', 'tl=' .. o.output_lang,
-        '--data', 'dt=t',
-        'https://translate.googleapis.com/translate_a/single',
-    }
+    local backend = string.lower(o.translation_backend or 'google')
+    local args = {}
+
+    if backend == 'libretranslate' then
+        local payload = '{"q":"' .. json_escape(line.text) .. '","source":"' .. json_escape(o.input_lang) .. '","target":"' .. json_escape(o.output_lang) .. '","format":"text"'
+        if o.libretranslate_api_key and o.libretranslate_api_key ~= '' then
+            payload = payload .. ',"api_key":"' .. json_escape(o.libretranslate_api_key) .. '"'
+        end
+        payload = payload .. '}'
+
+        args = {
+            o.curl_command,
+            '-sS',
+            '-X', 'POST',
+            '-H', 'Content-Type: application/json',
+            '--data', payload,
+            o.libretranslate_url,
+        }
+    else
+        args = {
+            o.curl_command,
+            '-sS',
+            '--get',
+            '--data-urlencode', 'q=' .. line.text,
+            '--data', 'client=gtx',
+            '--data', 'sl=' .. o.input_lang,
+            '--data', 'tl=' .. o.output_lang,
+            '--data', 'dt=t',
+            'https://translate.googleapis.com/translate_a/single',
+        }
+    end
 
     mp.command_native_async({
         name = 'subprocess',
@@ -174,9 +227,17 @@ local function request_translation(line, callback)
             return
         end
 
-        local translated, err = parse_translate_response(result.stdout or '')
+        local translated = nil
+        local parse_err = nil
+
+        if backend == 'libretranslate' then
+            translated, parse_err = parse_libretranslate_response(result.stdout or '')
+        else
+            translated, parse_err = parse_google_response(result.stdout or '')
+        end
+
         if not translated then
-            msg.warn('google-translate-subtitles: parse failed:', err,
+            msg.warn('google-translate-subtitles: parse failed:', parse_err,
                 'stdout=', result.stdout or 'nil', 'stderr=', result.stderr or 'nil')
             callback(nil)
             return
