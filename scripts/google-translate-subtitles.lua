@@ -17,6 +17,7 @@
 local mp = require 'mp'
 local msg = require 'mp.msg'
 local options = require 'mp.options'
+local utils = require 'mp.utils'
 
 local o = {
     input_lang = 'auto',
@@ -26,9 +27,29 @@ local o = {
     curl_command = '/usr/bin/curl',
     translation_backend = 'libretranslate',
     libretranslate_url = 'https://libretranslate.com/translate',
-    libretranslate_api_key = 'replace-with-your-api-key',
+    libretranslate_api_key = '',
 }
 options.read_options(o, 'google-translate-subtitles')
+
+local backend = string.lower(o.translation_backend or 'google')
+if backend ~= 'google' and backend ~= 'libretranslate' then
+    msg.warn('google-translate-subtitles: unknown translation_backend "' .. tostring(o.translation_backend) .. '"; falling back to "google"')
+    backend = 'google'
+end
+
+local backend_name = (backend == 'libretranslate' and 'LibreTranslate') or 'Google Translate'
+
+-- A missing or placeholder API key means "anonymous": skip sending api_key
+-- rather than fail with an invalid key.
+if backend == 'libretranslate' then
+    local key = o.libretranslate_api_key
+    if key == nil then
+        o.libretranslate_api_key = ''
+    elseif key == 'replace-with-your-api-key' then
+        msg.warn('google-translate-subtitles: placeholder libretranslate_api_key in config ignored; set a real key or leave it empty for anonymous use')
+        o.libretranslate_api_key = ''
+    end
+end
 
 local overlay = mp.create_osd_overlay('ass-events')
 overlay.hidden = true
@@ -43,6 +64,8 @@ local state = {
     cache = {},
     pending_lines = {},
     active_line = nil,
+    consecutive_failures = 0,
+    breaker_cooldown_until = 0,
     update_timer = nil,
 }
 
@@ -112,19 +135,40 @@ local function update_display()
 end
 
 
-local utils = require 'mp.utils'
 
 local function json_escape(value)
     if not value then
         return ''
     end
 
-    return value
-        :gsub('\\', '\\\\')
-        :gsub('"', '\\"')
-        :gsub('\n', '\\n')
-        :gsub('\r', '\\r')
-        :gsub('\t', '\\t')
+    -- Byte-by-byte escaping: the character-class shortcut [\0-\31] is a
+    -- malformed pattern in the LuaJIT that mpv embeds (plain Lua accepts it,
+    -- so luac alone wouldn't catch this).
+    local out = {}
+    for i = 1, #value do
+        local b = string.byte(value, i)
+        local c = string.char(b)
+        if c == '\\' then
+            out[#out + 1] = '\\\\'
+        elseif c == '"' then
+            out[#out + 1] = '\\"'
+        elseif b == 8 then
+            out[#out + 1] = '\\b'
+        elseif b == 12 then
+            out[#out + 1] = '\\f'
+        elseif b == 10 then
+            out[#out + 1] = '\\n'
+        elseif b == 13 then
+            out[#out + 1] = '\\r'
+        elseif b == 9 then
+            out[#out + 1] = '\\t'
+        elseif b < 32 then
+            out[#out + 1] = string.format('\\u%04x', b)
+        else
+            out[#out + 1] = c
+        end
+    end
+    return table.concat(out)
 end
 
 local function parse_google_response(body)
@@ -161,12 +205,21 @@ local function parse_libretranslate_response(body)
 end
 
 local function request_translation(line, callback)
-    if state.cache[line.cache_key] then
-        callback(state.cache[line.cache_key].translation)
+    local cached = state.cache[line.cache_key]
+    if cached then
+        callback(cached.translation)
         return
     end
 
-    local backend = string.lower(o.translation_backend or 'google')
+    -- Circuit breaker: after repeated failures, skip requests for a cooldown
+    -- period. This is wall-clock based (independent of subtitle timing) and
+    -- only gates the network request, not the display.
+    if os.time() < state.breaker_cooldown_until then
+        msg.warn('google-translate-subtitles: circuit breaker open for ' .. backend_name .. '; skipping translation request')
+        callback(nil)
+        return
+    end
+
     local args = {}
 
     if backend == 'libretranslate' then
@@ -179,6 +232,8 @@ local function request_translation(line, callback)
         args = {
             o.curl_command,
             '-sS',
+            '--connect-timeout', '5',
+            '--max-time', '20',
             '-X', 'POST',
             '-H', 'Content-Type: application/json',
             '--data', payload,
@@ -188,6 +243,8 @@ local function request_translation(line, callback)
         args = {
             o.curl_command,
             '-sS',
+            '--connect-timeout', '5',
+            '--max-time', '20',
             '--get',
             '--data-urlencode', 'q=' .. line.text,
             '--data', 'client=gtx',
@@ -196,6 +253,19 @@ local function request_translation(line, callback)
             '--data', 'dt=t',
             'https://translate.googleapis.com/translate_a/single',
         }
+    end
+
+    -- Records a failed attempt, aborts with callback(nil), and opens the
+    -- circuit breaker after 5 consecutive failures.
+    local function fail(reason)
+        state.consecutive_failures = state.consecutive_failures + 1
+        msg.warn('google-translate-subtitles: ' .. backend_name .. ' request failed: ' .. reason)
+        if state.consecutive_failures >= 5 then
+            state.consecutive_failures = 0
+            state.breaker_cooldown_until = os.time() + 60
+            msg.warn('google-translate-subtitles: circuit breaker open for 60s after 5 consecutive failures')
+        end
+        callback(nil)
     end
 
     mp.command_native_async({
@@ -209,21 +279,19 @@ local function request_translation(line, callback)
         end
 
         if not success then
-            msg.warn('google-translate-subtitles: subprocess init failed:', err or 'unknown error')
-            callback(nil)
+            fail('subprocess init failed: ' .. tostring(err or 'unknown error'))
             return
         end
 
         if type(result) ~= 'table' or result.status == nil then
-            msg.warn('google-translate-subtitles: subprocess returned invalid result:', tostring(result))
-            callback(nil)
+            fail('subprocess returned invalid result: ' .. tostring(result))
             return
         end
 
         if result.status ~= 0 then
-            msg.warn('google-translate-subtitles: translate API returned status', result.status,
-                'stderr=', result.stderr or 'nil', 'stdout=', result.stdout or 'nil')
-            callback(nil)
+            fail('translate API returned status ' .. tostring(result.status)
+                .. ' stderr=' .. tostring(result.stderr or 'nil')
+                .. ' stdout=' .. tostring(result.stdout or 'nil'))
             return
         end
 
@@ -237,11 +305,13 @@ local function request_translation(line, callback)
         end
 
         if not translated then
-            msg.warn('google-translate-subtitles: parse failed:', parse_err,
-                'stdout=', result.stdout or 'nil', 'stderr=', result.stderr or 'nil')
-            callback(nil)
+            fail('parse failed: ' .. tostring(parse_err)
+                .. ' stdout=' .. tostring(result.stdout or 'nil')
+                .. ' stderr=' .. tostring(result.stderr or 'nil'))
             return
         end
+
+        state.consecutive_failures = 0
 
         if not state.cache[line.cache_key] then
             state.cache[line.cache_key] = {
@@ -328,7 +398,7 @@ local function enable_translation()
     state.update_timer = mp.add_periodic_timer(0.05, update_display)
     state.update_timer:resume()
     state.enabled = true
-    msg.info('Google subtitle translation enabled')
+    msg.info(backend_name .. ' subtitle translation enabled')
 
     mp.add_timeout(0.2, function()
         local current = mp.get_property('sub-text')
@@ -356,7 +426,9 @@ local function disable_translation()
     state.pending_lines = {}
     state.active_line = nil
     state.enabled = false
-    msg.info('Google subtitle translation disabled')
+    -- The translation cache is intentionally kept across disable/enable cycles,
+    -- so repeated lines are not re-translated after a toggle.
+    msg.info(backend_name .. ' subtitle translation disabled')
 end
 
 local function toggle_translation()
@@ -368,4 +440,4 @@ local function toggle_translation()
 end
 
 mp.add_key_binding(o.toggle_key, 'toggle-google-translate-subtitles', toggle_translation)
-msg.info('google-translate-subtitles loaded; press ' .. o.toggle_key .. ' to toggle')
+msg.info('google-translate-subtitles loaded (' .. backend_name .. '); press ' .. o.toggle_key .. ' to toggle')
