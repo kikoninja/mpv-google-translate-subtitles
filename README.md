@@ -1,21 +1,24 @@
 # MPV Google Translate Subtitles
 
-An mpv script that automatically translates subtitles in real-time using Google Translate, displaying the translations as an on-screen overlay while hiding the original subtitles.
+An mpv script that automatically translates subtitles in real-time using Google Translate or a LibreTranslate instance, displaying the translations as an on-screen overlay while hiding the original subtitles.
 
 ## Features
 
-- **Real-time subtitle translation** using Google Translate API
-- **Automatic caching** to avoid repeated API calls for the same subtitle text
+- **Real-time subtitle translation** via Google Translate or a LibreTranslate instance
+- **Pluggable backend** - switch between `google` and `libretranslate` in the config
+- **Automatic caching** to avoid repeated API calls for the same subtitle text (the cache survives toggle off/on)
 - **Configurable languages** for both input and output
 - **Prefetch mode** that delays original subtitles to give time for translation requests
 - **Keyboard toggle** to enable/disable translation on the fly
 - **Customizable key binding** for toggling the feature
+- **Request timeouts** (5s connect / 20s max) so a hung endpoint cannot stall the script
+- **Circuit breaker** - after 5 consecutive failures, requests pause for 60s
 - **Lightweight and efficient** - only translates visible subtitles
 
 ## Requirements
 
 - mpv media player
-- curl (for making HTTP requests to Google Translate API)
+- curl (for making HTTP requests to the translation backend)
 - Lua support in mpv (included by default in most mpv builds)
 
 ## Installation
@@ -62,7 +65,29 @@ toggle_key=Ctrl+t
 
 # Path to curl executable
 curl_command=/usr/bin/curl
+
+# Which translation backend to use: "google" or "libretranslate"
+translation_backend=libretranslate
+
+# LibreTranslate endpoint (only used with translation_backend=libretranslate)
+libretranslate_url=https://libretranslate.com/translate
+
+# Optional LibreTranslate API key. Leave empty for anonymous usage.
+# A placeholder value ("replace-with-your-api-key") is ignored with a warning.
+libretranslate_api_key=
 ```
+
+### Rate limits
+
+The script issues one request per unique subtitle line and caches results in memory,
+so repeated lines are never re-translated. It deliberately does **not** throttle or
+delay requests — subtitle display timing depends on the line schedule, so rate
+limiting would break it. Users deploying LibreTranslate with rate limits should
+run their own instance or a known API key; against the public LibreTranslate
+endpoint, expect intermittent failures.
+
+After 5 consecutive failures the script opens a 60-second circuit breaker and skips
+further requests until the cooldown expires (each failure is logged).
 
 ### Language Codes
 
@@ -94,7 +119,7 @@ For a complete list of supported languages, see [Google Translate language codes
 ## How It Works
 
 - When enabled, the script intercepts subtitle text as it appears
-- Each subtitle line is sent to Google Translate API via curl
+- Each subtitle line is sent to the chosen translation backend via curl
 - Translations are cached in memory to avoid redundant API calls
 - Original subtitles are hidden, and translations are displayed as an overlay
 - A configurable delay is applied to give the API time to respond
@@ -118,7 +143,7 @@ For a complete list of supported languages, see [Google Translate language codes
 ## Limitations
 
 - Requires an internet connection for each translation
-- Depends on Google Translate API stability and availability
+- Depends on the chosen translation backend's stability and availability
 - Translation quality varies by language pair
 - Network latency may cause slight delays in subtitle display
 
