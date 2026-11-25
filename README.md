@@ -1,4 +1,4 @@
-# MPV Google Translate Subtitles
+# MPV Translate Subtitles
 
 An mpv script that automatically translates subtitles in real-time using Google Translate or a LibreTranslate instance, displaying the translations as an on-screen overlay while hiding the original subtitles.
 
@@ -10,6 +10,7 @@ An mpv script that automatically translates subtitles in real-time using Google 
 - **Configurable languages** for both input and output
 - **Prefetch mode** that delays original subtitles to give time for translation requests
 - **Keyboard toggle** to enable/disable translation on the fly
+- **Configurable font size** for the overlay, with keyboard shortcuts to increase/decrease it
 - **Customizable key binding** for toggling the feature
 - **Request timeouts** (5s connect / 20s max) so a hung endpoint cannot stall the script
 - **Circuit breaker** - after 5 consecutive failures, requests pause for 60s
@@ -29,12 +30,12 @@ An mpv script that automatically translates subtitles in real-time using Google 
 
 2. Copy the script file:
    ```bash
-   cp google-translate-subtitles.lua ~/.config/mpv/scripts/
+   cp translate-subtitles.lua ~/.config/mpv/scripts/
    ```
 
 3. Copy the configuration file:
    ```bash
-   cp google-translate-subtitles.conf ~/.config/mpv/script-opts/
+   cp translate-subtitles.conf ~/.config/mpv/script-opts/
    ```
 
    If the directories don't exist, create them:
@@ -45,7 +46,7 @@ An mpv script that automatically translates subtitles in real-time using Google 
 
 ## Configuration
 
-Edit `~/.config/mpv/script-opts/google-translate-subtitles.conf` to customize the behavior:
+Edit `~/.config/mpv/script-opts/translate-subtitles.conf` to customize the behavior:
 
 ```ini
 # Input language (source language of subtitles)
@@ -62,6 +63,17 @@ prefetch_seconds=5
 
 # Keyboard shortcut to toggle translation on/off
 toggle_key=Ctrl+t
+
+# Overlay font size for translated subtitles (in pixels)
+font_size=55
+
+# Amount the font size changes per increase/decrease key press
+font_size_step=5
+
+# Keyboard shortcuts for increasing/decreasing the overlay font size
+# (set to empty string to disable a binding)
+increase_font_size_key=Ctrl+up
+decrease_font_size_key=Ctrl+down
 
 # Path to curl executable
 curl_command=/usr/bin/curl
@@ -91,7 +103,7 @@ further requests until the cooldown expires (each failure is logged).
 
 ### Language Codes
 
-Common language codes supported by Google Translate:
+Common language codes supported by the translation backends:
 - `en` - English
 - `es` - Spanish
 - `fr` - French
@@ -114,7 +126,9 @@ For a complete list of supported languages, see [Google Translate language codes
    - Original subtitles will be hidden
    - Translations will appear as an overlay at the bottom of the screen
 3. Press the toggle key again to disable translation and show original subtitles
-4. The script will display an info message in mpv's console when enabling/disabling
+4. Press the font-size keys (default: `Ctrl+up` / `Ctrl+down`) to increase or
+   decrease the overlay font size
+5. The script will display an info message in mpv's console when enabling/disabling
 
 ## How It Works
 
@@ -138,7 +152,7 @@ For a complete list of supported languages, see [Google Translate language codes
 
 ### Wrong language detected
 - Set `input_lang` to the correct language code instead of `auto`
-- Some language pairs work better than others with Google Translate
+- Some language pairs work better than others with the translation backends
 
 ## Limitations
 

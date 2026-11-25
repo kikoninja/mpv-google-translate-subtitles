@@ -1,4 +1,4 @@
--- MPV Google Translate Subtitles
+-- MPV Translate Subtitles
 -- Copyright (C) 2026 Kristijan Antovski
 --
 -- This program is free software: you can redistribute it and/or modify
@@ -24,16 +24,20 @@ local o = {
     output_lang = 'mk',
     prefetch_seconds = 3,
     toggle_key = 'Ctrl+t',
+    font_size = 55,
+    font_size_step = 5,
+    increase_font_size_key = 'Ctrl+up',
+    decrease_font_size_key = 'Ctrl+down',
     curl_command = '/usr/bin/curl',
     translation_backend = 'libretranslate',
     libretranslate_url = 'https://libretranslate.com/translate',
     libretranslate_api_key = '',
 }
-options.read_options(o, 'google-translate-subtitles')
+options.read_options(o, 'translate-subtitles')
 
 local backend = string.lower(o.translation_backend or 'google')
 if backend ~= 'google' and backend ~= 'libretranslate' then
-    msg.warn('google-translate-subtitles: unknown translation_backend "' .. tostring(o.translation_backend) .. '"; falling back to "google"')
+    msg.warn('translate-subtitles: unknown translation_backend "' .. tostring(o.translation_backend) .. '"; falling back to "google"')
     backend = 'google'
 end
 
@@ -46,7 +50,7 @@ if backend == 'libretranslate' then
     if key == nil then
         o.libretranslate_api_key = ''
     elseif key == 'replace-with-your-api-key' then
-        msg.warn('google-translate-subtitles: placeholder libretranslate_api_key in config ignored; set a real key or leave it empty for anonymous use')
+        msg.warn('translate-subtitles: placeholder libretranslate_api_key in config ignored; set a real key or leave it empty for anonymous use')
         o.libretranslate_api_key = ''
     end
 end
@@ -56,8 +60,13 @@ overlay.hidden = true
 
 overlay.data = ''
 
+local status_overlay = mp.create_osd_overlay('ass-events')
+status_overlay.hidden = true
+status_overlay.data = ''
+
 local state = {
     enabled = false,
+    font_size = o.font_size,
     user_delay = 0,
     current_text = nil,
     current_start = nil,
@@ -67,6 +76,7 @@ local state = {
     consecutive_failures = 0,
     breaker_cooldown_until = 0,
     update_timer = nil,
+    status_timeout = nil,
 }
 
 local function normalize_text(text)
@@ -101,9 +111,29 @@ local function update_overlay(text)
         return
     end
 
-    overlay.data = string.format('{\\an2}%s', escape_ass(text))
+    overlay.data = string.format('{\\an2\\fs%d}%s', state.font_size, escape_ass(text))
     overlay.hidden = false
     overlay:update()
+end
+
+local function show_status_notification(text)
+    status_overlay.data = string.format('{\\an8\\fs40}%s', escape_ass(text))
+    status_overlay.hidden = false
+    status_overlay:update()
+    if state.status_timeout then
+        state.status_timeout:kill()
+        state.status_timeout = nil
+    end
+    state.status_timeout = mp.add_timeout(2.5, function()
+        status_overlay.hidden = true
+        status_overlay.data = ''
+        status_overlay:update()
+        state.status_timeout = nil
+    end)
+end
+
+local function status_message(suffix)
+    return string.format('Translation %s > %s %s', o.input_lang, o.output_lang, suffix)
 end
 
 local function update_display()
@@ -171,7 +201,7 @@ local function json_escape(value)
     return table.concat(out)
 end
 
-local function parse_google_response(body)
+local function parse_translation_response(body) -- parses the Google Translate API response format
     local parsed = utils.parse_json(body)
     if type(parsed) ~= 'table' or type(parsed[1]) ~= 'table' then
         return nil, 'unexpected response format'
@@ -215,7 +245,7 @@ local function request_translation(line, callback)
     -- period. This is wall-clock based (independent of subtitle timing) and
     -- only gates the network request, not the display.
     if os.time() < state.breaker_cooldown_until then
-        msg.warn('google-translate-subtitles: circuit breaker open for ' .. backend_name .. '; skipping translation request')
+        msg.warn('translate-subtitles: circuit breaker open for ' .. backend_name .. '; skipping translation request')
         callback(nil)
         return
     end
@@ -259,11 +289,11 @@ local function request_translation(line, callback)
     -- circuit breaker after 5 consecutive failures.
     local function fail(reason)
         state.consecutive_failures = state.consecutive_failures + 1
-        msg.warn('google-translate-subtitles: ' .. backend_name .. ' request failed: ' .. reason)
+        msg.warn('translate-subtitles: ' .. backend_name .. ' request failed: ' .. reason)
         if state.consecutive_failures >= 5 then
             state.consecutive_failures = 0
             state.breaker_cooldown_until = os.time() + 60
-            msg.warn('google-translate-subtitles: circuit breaker open for 60s after 5 consecutive failures')
+            msg.warn('translate-subtitles: circuit breaker open for 60s after 5 consecutive failures')
         end
         callback(nil)
     end
@@ -301,7 +331,7 @@ local function request_translation(line, callback)
         if backend == 'libretranslate' then
             translated, parse_err = parse_libretranslate_response(result.stdout or '')
         else
-            translated, parse_err = parse_google_response(result.stdout or '')
+            translated, parse_err = parse_translation_response(result.stdout or '')
         end
 
         if not translated then
@@ -399,6 +429,7 @@ local function enable_translation()
     state.update_timer:resume()
     state.enabled = true
     msg.info(backend_name .. ' subtitle translation enabled')
+    show_status_notification(status_message('ON'))
 
     mp.add_timeout(0.2, function()
         local current = mp.get_property('sub-text')
@@ -429,6 +460,28 @@ local function disable_translation()
     -- The translation cache is intentionally kept across disable/enable cycles,
     -- so repeated lines are not re-translated after a toggle.
     msg.info(backend_name .. ' subtitle translation disabled')
+    show_status_notification(status_message('OFF'))
+end
+
+local function set_font_size(delta)
+    local min_size = 10
+    local max_size = 400
+    local old = state.font_size
+    state.font_size = math.max(min_size, math.min(max_size, state.font_size + delta))
+    if state.font_size ~= old then
+        msg.info(string.format('translate-subtitles: font size %d', state.font_size))
+        if state.active_line then
+            update_overlay(state.active_line.translation)
+        end
+    end
+end
+
+local function increase_font_size()
+    set_font_size(o.font_size_step)
+end
+
+local function decrease_font_size()
+    set_font_size(-o.font_size_step)
 end
 
 local function toggle_translation()
@@ -439,5 +492,11 @@ local function toggle_translation()
     end
 end
 
-mp.add_key_binding(o.toggle_key, 'toggle-google-translate-subtitles', toggle_translation)
-msg.info('google-translate-subtitles loaded (' .. backend_name .. '); press ' .. o.toggle_key .. ' to toggle')
+mp.add_key_binding(o.toggle_key, 'toggle-translate-subtitles', toggle_translation)
+if o.increase_font_size_key and o.increase_font_size_key ~= '' then
+    mp.add_key_binding(o.increase_font_size_key, 'increase-translate-subtitles-font-size', increase_font_size)
+end
+if o.decrease_font_size_key and o.decrease_font_size_key ~= '' then
+    mp.add_key_binding(o.decrease_font_size_key, 'decrease-translate-subtitles-font-size', decrease_font_size)
+end
+msg.info('translate-subtitles loaded (' .. backend_name .. '); press ' .. o.toggle_key .. ' to toggle')
