@@ -10,7 +10,7 @@ An mpv script that automatically translates subtitles in real-time using Google 
 - **Configurable languages** for both input and output
 - **Prefetch mode** that delays original subtitles to give time for translation requests
 - **Keyboard toggle** to enable/disable translation on the fly
-- **Configurable font size** for the overlay, with keyboard shortcuts to increase/decrease it
+- **Configurable font size** for the overlay, with keyboard shortcuts to increase/decrease it (the adjusted size is saved to disk and restored on the next start, overriding the config default)
 - **Customizable key binding** for toggling the feature
 - **Request timeouts** (5s connect / 20s max) so a hung endpoint cannot stall the script
 - **Circuit breaker** - after 5 consecutive failures, requests pause for 60s
@@ -65,6 +65,10 @@ prefetch_seconds=5
 toggle_key=Ctrl+t
 
 # Overlay font size for translated subtitles (in pixels)
+# This is the default used when no saved font size exists, or it is invalid.
+# Adjusting the size with the keyboard shortcuts saves it to
+# <config-dir>/script-state/translate-subtitles.json, which overrides this value
+# on subsequent starts (delete that file to go back to the config default).
 font_size=55
 
 # Amount the font size changes per increase/decrease key press
@@ -127,7 +131,9 @@ For a complete list of supported languages, see [Google Translate language codes
    - Translations will appear as an overlay at the bottom of the screen
 3. Press the toggle key again to disable translation and show original subtitles
 4. Press the font-size keys (default: `Ctrl+up` / `Ctrl+down`) to increase or
-   decrease the overlay font size
+   decrease the overlay font size — the adjusted size is saved to
+   `~/.config/mpv/script-state/translate-subtitles.json` and restored on the
+   next start, overriding `font_size` from the config
 5. The script will display an info message in mpv's console when enabling/disabling
 
 ## How It Works
