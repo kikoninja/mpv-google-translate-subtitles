@@ -28,10 +28,14 @@ An mpv script that automatically translates subtitles in real-time using Google 
    - **Linux/macOS**: `~/.config/mpv/scripts/`
    - **Windows**: `%APPDATA%\mpv\scripts\`
 
-2. Copy the script file:
+2. Copy the script directory:
    ```bash
-   cp translate-subtitles.lua ~/.config/mpv/scripts/
+   cp -r scripts/translate-subtitles ~/.config/mpv/scripts/
    ```
+
+   The script is a directory packaged for mpv: `main.lua` is the entry point and
+   the `ts_*.lua` modules next to it hold the options, state, display and
+   translation logic. You only need to copy the directory, not individual files.
 
 3. Copy the configuration file:
    ```bash
