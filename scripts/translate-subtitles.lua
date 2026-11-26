@@ -55,6 +55,104 @@ if backend == 'libretranslate' then
     end
 end
 
+-- Persistent state (saved font size) is stored as JSON in the mpv config
+-- directory: <config-dir>/script-state/translate-subtitles.json.
+-- This overrides the font_size from the config file once the user has
+-- adjusted it with the font-size keys. The config file remains the
+-- default; the saved value is written on every font size change.
+local MIN_FONT_SIZE = 10
+local MAX_FONT_SIZE = 120
+
+local function get_config_dir()
+    local xdg = os.getenv('XDG_CONFIG_HOME')
+    if xdg and xdg ~= '' then
+        return xdg .. '/mpv'
+    end
+    local home = os.getenv('HOME')
+    if home and home ~= '' then
+        return home .. '/.config/mpv'
+    end
+    return nil
+end
+
+local function get_state_file()
+    local dir = get_config_dir()
+    if not dir then
+        return nil
+    end
+    return dir .. '/script-state/translate-subtitles.json'
+end
+
+local function shell_quote(path)
+    return "'" .. path:gsub("'", "'\"'\"'") .. "'"
+end
+
+local function ensure_parent_dir(path)
+    local dir = path:match('(.*)/[^/]+$')
+    if not dir or dir == '' then
+        return
+    end
+    local ok, p = pcall(io.popen, 'mkdir -p ' .. shell_quote(dir))
+    if ok and p then
+        p:close()
+    end
+end
+
+local function load_saved_font_size()
+    local path = get_state_file()
+    if not path then
+        return nil
+    end
+    local ok_open, f = pcall(io.open, path, 'r')
+    if not ok_open or not f then
+        return nil
+    end
+    local ok_read, content = pcall(f.read, f, '*a')
+    f:close()
+    if not ok_read or not content then
+        return nil
+    end
+    local parsed = nil
+    pcall(function()
+        parsed = utils.parse_json(content)
+    end)
+    if type(parsed) ~= 'table' then
+        msg.warn('translate-subtitles: state file unreadable; using config font size')
+        return nil
+    end
+    local size = tonumber(parsed.font_size)
+    if not size or size ~= size or size <= 0 then
+        return nil
+    end
+    return math.max(MIN_FONT_SIZE, math.min(MAX_FONT_SIZE, size))
+end
+
+local function save_font_size(font_size)
+    local path = get_state_file()
+    if not path then
+        msg.warn('translate-subtitles: cannot determine mpv config directory; font size not saved')
+        return
+    end
+    ensure_parent_dir(path)
+    local tmp_path = path .. '.tmp'
+    local ok, f = pcall(io.open, tmp_path, 'w')
+    if not ok or not f then
+        msg.warn('translate-subtitles: cannot write state file ' .. tmp_path)
+        return
+    end
+    f:write(string.format('{"font_size": %s}\n', tostring(font_size)))
+    f:close()
+    if not os.rename(tmp_path, path) then
+        pcall(os.remove, tmp_path)
+        msg.warn('translate-subtitles: cannot move state file into place')
+    end
+end
+
+local saved_font_size = load_saved_font_size()
+if saved_font_size ~= nil and saved_font_size ~= o.font_size then
+    msg.info('translate-subtitles: using saved font size ' .. tostring(saved_font_size) .. ' (config default ' .. tostring(o.font_size) .. ')')
+end
+
 local overlay = mp.create_osd_overlay('ass-events')
 overlay.hidden = true
 
@@ -66,7 +164,7 @@ status_overlay.data = ''
 
 local state = {
     enabled = false,
-    font_size = o.font_size,
+    font_size = saved_font_size or o.font_size,
     user_delay = 0,
     current_text = nil,
     current_start = nil,
@@ -111,7 +209,7 @@ local function update_overlay(text)
         return
     end
 
-    overlay.data = string.format('{\\an2\\fs%d}%s', state.font_size, escape_ass(text))
+    overlay.data = string.format('{\\an2\\fs%s}%s', tostring(state.font_size), escape_ass(text))
     overlay.hidden = false
     overlay:update()
 end
@@ -464,15 +562,14 @@ local function disable_translation()
 end
 
 local function set_font_size(delta)
-    local min_size = 10
-    local max_size = 400
     local old = state.font_size
-    state.font_size = math.max(min_size, math.min(max_size, state.font_size + delta))
+    state.font_size = math.max(MIN_FONT_SIZE, math.min(MAX_FONT_SIZE, state.font_size + delta))
     if state.font_size ~= old then
-        msg.info(string.format('translate-subtitles: font size %d', state.font_size))
+        msg.info(string.format('translate-subtitles: font size %s', tostring(state.font_size)))
         if state.active_line then
             update_overlay(state.active_line.translation)
         end
+        save_font_size(state.font_size)
     end
 end
 
