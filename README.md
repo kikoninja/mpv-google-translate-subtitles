@@ -24,6 +24,56 @@ An mpv script that automatically translates subtitles in real-time using Google 
 
 ## Installation
 
+### Install script (Linux/macOS)
+
+The easiest way is the installer, which copies the script, generates a config,
+and adds an in-player context-menu item:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kikoninja/mpv-translate-subtitles/master/install.sh | sh
+```
+
+With an interactive terminal it asks which backend to use (`google` or
+`libretranslate`), the LibreTranslate URL and optional API key. With no
+terminal it writes the defaults. Set `MPV_TRANSLATE_NONINTERACTIVE=1` to skip
+the prompts explicitly.
+
+The installer installs the **latest tagged version** by default. To install a
+specific version:
+
+```bash
+MPV_TRANSLATE_SUBTITLES_REF=v0.3 sh -c 'curl -fsSL https://raw.githubusercontent.com/kikoninja/mpv-translate-subtitles/master/install.sh | sh'
+```
+
+or, from a checkout:
+
+```bash
+./install.sh --ref v0.3
+```
+
+The minimum supported version is **v0.2** (the first tag with the
+`libretranslate` backend). Older tags are rejected.
+
+What it does, per install:
+
+1. Copies the script into `~/.config/mpv/scripts/` (uses the script layout
+   of the chosen version: flat `.lua` for v0.2/v0.3, `scripts/translate-subtitles/`
+   for v0.4+).
+2. Prompts for the backend and (for LibreTranslate) the URL and API key, then
+   writes `~/.config/mpv/script-opts/translate-subtitles.conf` (named after
+   the version's script name). If that file already exists it is left untouched.
+3. Adds an in-player "Translate" item to the mpv context menu
+   (`~/.config/mpv/menu.conf`). If `menu.conf` is missing or empty, it is
+   generated from mpv's default menu (via a throwaway headless mpv instance);
+   otherwise the item is injected into the existing file. The original is
+   backed up to `menu.conf.bak` on first modification. Menu injection requires
+   v0.4+ (the `toggle-translate` binding) — older versions skip this step with
+   a warning.
+
+The installer never touches system directories and never runs with sudo.
+
+### Manual installation
+
 1. Locate your mpv scripts directory:
    - **Linux/macOS**: `~/.config/mpv/scripts/`
    - **Windows**: `%APPDATA%\mpv\scripts\`
@@ -36,10 +86,11 @@ An mpv script that automatically translates subtitles in real-time using Google 
    The script is a directory packaged for mpv: `main.lua` is the entry point and
    the `ts_*.lua` modules next to it hold the options, state, display and
    translation logic. You only need to copy the directory, not individual files.
+   (For v0.2/v0.3 the script is a flat `.lua` file instead — copy it directly.)
 
 3. Copy the configuration file:
    ```bash
-   cp translate-subtitles.conf ~/.config/mpv/script-opts/
+   cp script-opts/translate-subtitles.conf ~/.config/mpv/script-opts/
    ```
 
    If the directories don't exist, create them:
