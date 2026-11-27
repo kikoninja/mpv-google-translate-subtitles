@@ -252,20 +252,29 @@ LUA
             info "backed up existing menu.conf to $MENU_CONF.bak"
         fi
 
-        # inject (awk): add the Translate line after the first &Subtitle header
-        # (or append a new section) with a stable indent
+        # inject (awk): add the Translate line right after the first &Subtitle
+        # header, indented the same as the section's first item (menu.conf uses
+        # tabs; mixing a 4-space line breaks the parser's nesting logic).
         awk '
             /^[[:space:]]*&Subtitle/ && !done {
                 print
-                print "    &Translate\tscript-binding translate_subtitles/toggle-translate\tchecked=get(\"user-data/translate-subtitles/enabled\", false)"
+                in_section = 1
+                next
+            }
+            in_section && $0 ~ /[^[:space:]]/ {
+                match($0, /^[[:space:]]*/)
+                indent = substr($0, 1, RLENGTH)
+                print indent "&Translate\tscript-binding translate_subtitles/toggle-translate\tchecked=get(\"user-data/translate-subtitles/enabled\", false)"
                 done = 1
+                in_section = 0
+                print
                 next
             }
             { print }
             END {
                 if (!done) {
                     print "&Subtitle"
-                    print "    &Translate\tscript-binding translate_subtitles/toggle-translate\tchecked=get(\"user-data/translate-subtitles/enabled\", false)"
+                    print "\t&Translate\tscript-binding translate_subtitles/toggle-translate\tchecked=get(\"user-data/translate-subtitles/enabled\", false)"
                 }
             }
         ' "$TMP/menu-final" > "$TMP/menu-out"
