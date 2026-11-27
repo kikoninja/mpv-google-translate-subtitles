@@ -129,10 +129,16 @@ if grep -r -q "'toggle-translate'" "$CONFIG_DIR/scripts/" 2>/dev/null; then
     MENU_SUPPORTED=1
 fi
 
-# ---- interactive prompts (TTY only) ----------------------------------------
+# ---- interactive prompts ---------------------------------------------------
+# Prompts go to /dev/tty (when available) so they still work when the script
+# itself was piped in via curl | sh. Otherwise (no controlling terminal, or
+# MPV_TRANSLATE_NONINTERACTIVE=1) the prompts are skipped and defaults are used.
 INTERACTIVE=0
-if [ -t 0 ] && [ -z "${MPV_TRANSLATE_NONINTERACTIVE:-}" ]; then
+TTY=
+
+if [ -z "${MPV_TRANSLATE_NONINTERACTIVE:-}" ] && [ -r /dev/tty ] 2>/dev/null; then
     INTERACTIVE=1
+    TTY=/dev/tty
 fi
 
 BACKEND="libretranslate"
@@ -140,23 +146,25 @@ LT_URL="https://libretranslate.com/translate"
 LT_KEY=""
 
 if [ "$INTERACTIVE" -eq 1 ]; then
-    echo
-    echo "Install options (press Enter to accept the default):"
-    echo "  1) google"
-    echo "  2) libretranslate"
-    printf 'Backend [2]: '
-    read -r ans || ans=""
+    {
+        echo
+        echo "Install options (press Enter to accept the default):"
+        echo "  1) google"
+        echo "  2) libretranslate"
+        printf 'Backend [2]: '
+    } > "$TTY"
+    read -r ans < "$TTY" || ans=""
     case "$ans" in
         1|google|Google|GOOGLE) BACKEND="google" ;;
         2|libretranslate|LibreTranslate|LIBRETRANSLATE|"") BACKEND="libretranslate" ;;
-        *) echo "unknown choice '$ans'; using libretranslate" >&2; BACKEND="libretranslate" ;;
+        *) echo "unknown choice '$ans'; using libretranslate" > "$TTY"; BACKEND="libretranslate" ;;
     esac
     if [ "$BACKEND" = "libretranslate" ]; then
-        printf 'LibreTranslate URL [%s]: ' "$LT_URL"
-        read -r ans || ans=""
+        printf 'LibreTranslate URL [%s]: ' "$LT_URL" > "$TTY"
+        read -r ans < "$TTY" || ans=""
         [ -n "$ans" ] && LT_URL="$ans"
-        printf 'LibreTranslate API key [empty = anonymous]: '
-        read -r ans || ans=""
+        printf 'LibreTranslate API key [empty = anonymous]: ' > "$TTY"
+        read -r ans < "$TTY" || ans=""
         LT_KEY="$ans"
     fi
 fi
