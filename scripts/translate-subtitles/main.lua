@@ -42,6 +42,13 @@ state.font_size = saved_font_size or o.font_size
 ts_display.setup(o)
 ts_translate.setup(o, backend, backend_name)
 
+-- Expose the enabled state to the in-player context menu: the menu.conf
+-- Translate toggle item observes this property to show its checked state.
+local function update_menu_toggle_state(enabled)
+    mp.set_property_native('user-data/translate-subtitles/enabled', enabled)
+end
+update_menu_toggle_state(false)
+
 local function on_subtitle_change(_, sub_text)
     if not state.enabled then
         return
@@ -114,6 +121,7 @@ local function enable_translation()
     state.update_timer = mp.add_periodic_timer(0.05, ts_display.update_display)
     state.update_timer:resume()
     state.enabled = true
+    update_menu_toggle_state(true)
     msg.info(backend_name .. ' subtitle translation enabled')
     ts_display.show_status_notification(ts_display.status_message('ON'))
 
@@ -143,6 +151,7 @@ local function disable_translation()
     state.pending_lines = {}
     state.active_line = nil
     state.enabled = false
+    update_menu_toggle_state(false)
     -- The translation cache is intentionally kept across disable/enable cycles,
     -- so repeated lines are not re-translated after a toggle.
     msg.info(backend_name .. ' subtitle translation disabled')
@@ -176,6 +185,11 @@ local function toggle_translation()
         enable_translation()
     end
 end
+
+-- The in-player context menu triggers the toggle via:
+--   script-binding translate_subtitles/toggle-translate
+-- (mpv mangles the script name to underscores.)
+mp.add_key_binding(nil, 'toggle-translate', toggle_translation)
 
 mp.add_key_binding(o.toggle_key, 'toggle-translate-subtitles', toggle_translation)
 if o.increase_font_size_key and o.increase_font_size_key ~= '' then
